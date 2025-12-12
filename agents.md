@@ -26,6 +26,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 ---
 
 ## 推奨リポジトリ構成
+- `.venv/`（python 仮想環境）
 - `src/discord_webp_tuner/`
   - `cli.py`（Typer推奨、なければargparseでもOK）
   - `pipeline.py`（探索の主処理）
