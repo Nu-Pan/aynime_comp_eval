@@ -1,4 +1,3 @@
-
 # agents.md
 
 ## 目的
@@ -7,7 +6,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 
 ## スコープ
 - 入力：既存PNG（基本RGB、場合によりRGBA）ニャン。  
-- 出力：WebP（cwebpでエンコード）＋評価結果CSV/Parquet＋散布図（matplotlib）ニャン。  
+- 出力：WebP（Pillowでエンコード）＋評価結果CSV/Parquet＋散布図（matplotlib）ニャン。  
 - 評価指標：主に **MS-SSIM（輝度Y）**、補助で **GMSD**、監視でPSNR（任意）ニャン。  
 - 評価解像度：縮小表示を想定した **targetA（例：長辺960〜1200）** を主、拡大表示想定の **targetB（例：長辺1600）** を任意で併用するニャン。  
 
@@ -19,8 +18,8 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 ## 方針（重要）
 1. **評価は縮小後**に行うニャン（Discordの体験に寄せるニャン）。  
 2. まず **縮小→WebP** を基本とし、後段で `quality` を詰めるニャン。  
-3. WebPは **cwebp** を利用し、探索は `-q` を中心にするニャン。  
-4. cwebpは基本 `-m 6` 固定（時間と引き換えにサイズを詰める）ニャン。  
+3. WebPは **Pillow** を利用し、探索は `quality` を中心にするニャン。  
+4. エンコードは基本 `method=6` 固定（時間と引き換えにサイズを詰める）ニャン。  
 5. αがあるPNGは、比較前に **固定背景へ合成**してから評価するニャン（例：背景 #000/#fff/#808080 のいずれかを選択可能にするニャン）。  
 
 ---
@@ -48,8 +47,9 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 ## セットアップ
 
 ### 必須ツール
-- `cwebp` がPATH上で実行できることニャン。  
-  - WindowsならWebP配布物（libwebp）を導入し、`cwebp.exe` へのパスを通すニャン。  
+- Pythonの **Pillow が WebP をサポートしていること**ニャン。  
+  - 確認例：`from PIL import features; features.check("webp")` が `True` になることニャン。  
+  - Windowsのホイールで通常はOKだけど、環境によってはWebPが無効の場合があるので注意ニャン。  
 
 ### Python依存（例）
 - Pillow
@@ -97,11 +97,14 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
   - targetA/targetBの長辺に合わせてリサイズニャン。  
   - リサンプラは `LANCZOS` を推奨し、全工程で固定して再現性を担保するニャン。  
 
-### 2) WebPエンコード（cwebp）
-- コマンド例（方針）：
-  - `cwebp -q {q} -m 6 -metadata none -o out.webp in.png`
-- オプション検討（任意）：
-  - `-sharp_yuv` をON/OFFして比較できる設計にするニャン（輪郭の色にじみ改善に効く場合があるニャン）。  
+### 2) WebPエンコード（Pillow）
+- 方針：縮小後の画像を `Image.save(..., format="WEBP")` でエンコードするニャン。  
+- 代表パラメータ：
+  - `quality={q}`（探索対象、0..100）
+  - `method=6`（固定）
+  - `use_sharp_yuv` をON/OFFして比較できる設計にするニャン（輪郭の色にじみ改善に効く場合があるニャン）。  
+- 実装イメージ（例）：
+  - `img.save(out_path, "WEBP", quality=q, method=6, use_sharp_yuv=sharp_yuv)`
 - 探索レンジ（例）：
   - まず粗く：`q = 30..80 step 5`
   - 絞り込み：膝付近を `step 1` で再探索ニャン。  
@@ -156,7 +159,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
   - `--target-long-edge A=960 B=1600` のように指定可能
   - `--q-min/--q-max/--q-step`
   - `--bg-color`（RGBA用）
-  - `--sharp-yuv`（切替）
+  - `--sharp-yuv`（Pillowの `use_sharp_yuv` 切替）
   - `--save-webp`（全保存/ベストのみ/保存なし）
 - `plot`：
   - CSVから散布図生成
@@ -169,7 +172,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 - 1枚のPNGを使い、同一入力に対して：
   - 縮小サイズが期待通り
   - 指標が範囲内（MS-SSIMは0..1、GMSDは>=0）
-  - cwebpが見つからない場合に分かりやすく失敗する
+  - PillowのWebPサポートが無い場合に分かりやすく失敗する
   - RGBA合成が再現できる（背景固定）  
 
 ---

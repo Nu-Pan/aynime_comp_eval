@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import os
 import shutil
-import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from PIL import Image
+import PIL
+from PIL import Image, features
 from tqdm import tqdm
 
 from .config import SweepConfig, TargetSpec
@@ -27,49 +28,51 @@ from .io import (
 from .metrics import compute_metrics_y
 
 
-def resolve_cwebp(cwebp_path: str | None) -> str:
-    if cwebp_path:
-        p = Path(cwebp_path)
-        if p.exists():
-            return str(p)
-        raise FileNotFoundError(f"cwebp not found at: {cwebp_path}")
-    found = shutil.which("cwebp")
-    if not found:
-        raise FileNotFoundError(
-            "cwebp not found on PATH. Install libwebp and ensure cwebp is available."
+def require_pillow_webp_support() -> None:
+    if not features.check("webp"):
+        raise RuntimeError(
+            "Pillow is built without WebP support. Install a Pillow build that includes WebP "
+            "(e.g. upgrade Pillow / reinstall wheels) and verify: "
+            "python -c \"from PIL import features; print(features.check('webp'))\""
         )
-    return found
+
+
+def _validate_pillow_webp_encoder(*, method: int, sharp_yuv: bool) -> None:
+    require_pillow_webp_support()
+    img = Image.new("RGB", (1, 1), color=(0, 0, 0))
+    buf = io.BytesIO()
+    save_kwargs: dict[str, Any] = {"format": "WEBP", "quality": 80, "method": int(method)}
+    if sharp_yuv:
+        save_kwargs["use_sharp_yuv"] = True
+
+    try:
+        img.save(buf, **save_kwargs)
+    except TypeError as e:
+        raise RuntimeError(
+            f"Pillow WebP encoder does not support requested options: method={method}, sharp_yuv={sharp_yuv}. "
+            f"Details: {e}"
+        ) from e
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize Pillow WebP encoder: {e}") from e
 
 
 def _encode_webp(
     *,
-    cwebp: str,
-    in_png: Path,
     out_webp: Path,
+    img_rgb: Image.Image,
     q: int,
     method: int,
     sharp_yuv: bool,
 ) -> None:
     ensure_dir(out_webp.parent)
-    cmd = [
-        cwebp,
-        "-q",
-        str(int(q)),
-        "-m",
-        str(int(method)),
-        "-metadata",
-        "none",
-        "-quiet",
-    ]
-    if sharp_yuv:
-        cmd.append("-sharp_yuv")
-    cmd += ["-o", str(out_webp), str(in_png)]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
-    except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or b"").decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"cwebp failed for {in_png} q={q}: {stderr}") from e
+        save_kwargs: dict[str, Any] = {"format": "WEBP", "quality": int(q), "method": int(method)}
+        if sharp_yuv:
+            save_kwargs["use_sharp_yuv"] = True
+        img_rgb.save(out_webp, **save_kwargs)
+    except Exception as e:
+        raise RuntimeError(f"WebP encode failed for {out_webp} q={q} method={method} sharp_yuv={sharp_yuv}") from e
 
 
 def _decode_webp(path_webp: Path) -> Image.Image:
@@ -94,10 +97,10 @@ def _process_one_image(
     in_dir: Path,
     out_dir: Path,
     config: SweepConfig,
-    cwebp: str,
     compute_psnr: bool,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    require_pillow_webp_support()
     bg_rgb = parse_bg_color(config.bg_color)
     path_png = work.path_png
 
@@ -132,9 +135,8 @@ def _process_one_image(
             )
             if not webp_cache.exists():
                 _encode_webp(
-                    cwebp=cwebp,
-                    in_png=cache.resized_png,
                     out_webp=webp_cache,
+                    img_rgb=resized,
                     q=q,
                     method=config.method,
                     sharp_yuv=config.sharp_yuv,
@@ -180,14 +182,14 @@ def sweep_dir(
     in_dir: Path,
     out_dir: Path,
     config: SweepConfig,
-    cwebp_path: str | None = None,
     compute_psnr: bool = True,
 ) -> Path:
     in_dir = in_dir.expanduser().resolve()
     out_dir = out_dir.expanduser().resolve()
     ensure_dir(out_dir / "results")
 
-    cwebp = resolve_cwebp(cwebp_path)
+    require_pillow_webp_support()
+    _validate_pillow_webp_encoder(method=config.method, sharp_yuv=config.sharp_yuv)
     pngs = list_pngs(in_dir)
     if not pngs:
         raise FileNotFoundError(f"No PNG files found under: {in_dir}")
@@ -200,7 +202,11 @@ def sweep_dir(
             "timestamp": run_ts,
             "in_dir": str(in_dir),
             "out_dir": str(out_dir),
-            "cwebp": cwebp,
+            "encoder": {
+                "type": "pillow",
+                "pillow_version": getattr(PIL, "__version__", None),
+                "webp_supported": bool(features.check("webp")),
+            },
             "compute_psnr": bool(compute_psnr),
             "config": config.to_jsonable(),
         },
@@ -217,7 +223,6 @@ def sweep_dir(
                     in_dir=in_dir,
                     out_dir=out_dir,
                     config=config,
-                    cwebp=cwebp,
                     compute_psnr=compute_psnr,
                 )
             )
@@ -230,7 +235,6 @@ def sweep_dir(
                     in_dir=in_dir,
                     out_dir=out_dir,
                     config=config,
-                    cwebp=cwebp,
                     compute_psnr=compute_psnr,
                 )
                 for w in work_items

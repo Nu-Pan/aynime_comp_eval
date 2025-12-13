@@ -1,0 +1,56 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "discord-webp-tuner: sweep (A, writes data/results)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "discord_webp_tuner.cli",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "args": [
+        "sweep",
+        "--in-dir",
+        "${workspaceFolder}/data/input_png",
+        "--out-dir",
+        "${workspaceFolder}/data",
+        "--target-long-edge",
+        "A=1080",
+        "--q-min",
+        "30",
+        "--q-max",
+        "80",
+        "--q-step",
+        "5",
+        "--plot"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "discord-webp-tuner: plot (data/results/metrics.csv -> data/results)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "discord_webp_tuner.cli",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src"
+      },
+      "args": [
+        "plot",
+        "--csv",
+        "${workspaceFolder}/data/results/metrics.csv",
+        "--out-dir",
+        "${workspaceFolder}/data/results",
+        "--target",
+        "A",
+        "--pareto",
+        "--knee"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

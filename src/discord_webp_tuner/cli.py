@@ -25,7 +25,6 @@ def sweep(
     sharp_yuv: Annotated[bool, typer.Option("--sharp-yuv")] = False,
     save_webp: Annotated[str, typer.Option("--save-webp")] = "best",
     jobs: Annotated[int, typer.Option("--jobs")] = 1,
-    cwebp_path: Annotated[Optional[str], typer.Option("--cwebp")] = None,
     psnr: Annotated[bool, typer.Option("--psnr/--no-psnr")] = True,
     plot: Annotated[bool, typer.Option("--plot/--no-plot")] = True,
 ) -> None:
@@ -45,7 +44,6 @@ def sweep(
         in_dir=in_dir,
         out_dir=out_dir,
         config=config,
-        cwebp_path=cwebp_path,
         compute_psnr=psnr,
     )
     typer.echo(f"wrote: {csv_path}")
@@ -86,4 +84,3 @@ def plot(
 
 if __name__ == "__main__":
     app()
-
