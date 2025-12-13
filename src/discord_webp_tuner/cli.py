@@ -9,6 +9,7 @@ import typer
 from .config import SweepConfig, parse_target_long_edges
 from .pipeline import sweep_dir
 from .plot import scatter_plot
+from .plot_interactive import interactive_scatter_plot
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -80,6 +81,34 @@ def plot(
     out_png = out_dir / f"scatter_target{target}.png"
     scatter_plot(df=dft, out_path=out_png, title=f"target {target}", show_pareto=show_pareto, show_knee=show_knee)
     typer.echo(f"wrote: {out_png}")
+
+
+@app.command("plot-interactive")
+def plot_interactive(
+    csv: Annotated[Path, typer.Option("--csv", exists=True, file_okay=True, dir_okay=False)],
+    out_dir: Annotated[Path, typer.Option("--out-dir")],
+    target: Annotated[str, typer.Option("--target")] = "A",
+    show_pareto: Annotated[bool, typer.Option("--pareto/--no-pareto")] = True,
+    show_knee: Annotated[bool, typer.Option("--knee/--no-knee")] = True,
+    sample_per_q: Annotated[int, typer.Option("--sample-per-q")] = 0,
+) -> None:
+    df = pd.read_csv(csv)
+    dft = df[df["target"] == target]
+    if len(dft) == 0:
+        raise typer.BadParameter(f"No rows for target={target!r} in {csv}")
+    out_html = out_dir / f"scatter_target{target}.html"
+    try:
+        interactive_scatter_plot(
+            df=dft,
+            out_path=out_html,
+            title=f"target {target}",
+            show_pareto=show_pareto,
+            show_knee=show_knee,
+            sample_per_q=sample_per_q,
+        )
+    except ModuleNotFoundError as e:
+        raise typer.BadParameter(f"{e} (csv={csv})") from e
+    typer.echo(f"wrote: {out_html}")
 
 
 if __name__ == "__main__":
