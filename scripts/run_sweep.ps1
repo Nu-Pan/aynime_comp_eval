@@ -1,11 +1,10 @@
 param(
   [Parameter(Mandatory=$true)][string]$InDir,
   [Parameter(Mandatory=$true)][string]$OutDir,
-  [int]$QMin = 30,
-  [int]$QMax = 80,
+  [int]$QMin = 60,
+  [int]$QMax = 100,
   [int]$QStep = 5,
-  [string]$TargetA = "A=1080",
-  [string]$TargetB = "B=1600",
+  [string]$TargetA = "A=1280",
   [string]$BgColor = "808080",
   [switch]$SharpYuv,
   [ValidateSet("all","best","none")][string]$SaveWebp = "best",
@@ -20,7 +19,6 @@ $args = @(
   "--q-max", $QMax,
   "--q-step", $QStep,
   "--target-long-edge", $TargetA,
-  "--target-long-edge", $TargetB,
   "--bg-color", $BgColor,
   "--save-webp", $SaveWebp,
   "--jobs", $Jobs
@@ -29,4 +27,3 @@ $args = @(
 if ($SharpYuv) { $args += "--sharp-yuv" }
 
 python -m discord_webp_tuner.cli @args
-

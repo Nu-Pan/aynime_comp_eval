@@ -15,7 +15,7 @@ Discordでの縮小表示を想定して、PNG→縮小→WebP（Pillow）を `q
 スイープ：
 
 ```powershell
-discord-webp-tuner sweep --in-dir data/input_png --out-dir data --q-min 30 --q-max 80 --q-step 5 --target-long-edge A=1080 B=1600 --bg-color 808080 --sharp-yuv
+discord-webp-tuner sweep --in-dir data/input_png --out-dir data --q-min 60 --q-max 100 --q-step 5 --target-long-edge A=1280 --bg-color 808080 --sharp-yuv
 ```
 
 散布図（CSVから生成）：
@@ -23,4 +23,3 @@ discord-webp-tuner sweep --in-dir data/input_png --out-dir data --q-min 30 --q-m
 ```powershell
 discord-webp-tuner plot --csv data/results/metrics.csv --out-dir data/results --target A
 ```
-

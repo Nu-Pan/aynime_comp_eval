@@ -8,7 +8,7 @@ import typer
 
 from .config import SweepConfig, parse_target_long_edges
 from .pipeline import sweep_dir
-from .plot import scatter_plot
+from .plot import saturation_plot, scatter_plot
 from .plot_interactive import interactive_scatter_plot
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -18,8 +18,8 @@ app = typer.Typer(add_completion=False, no_args_is_help=True)
 def sweep(
     in_dir: Annotated[Path, typer.Option("--in-dir", exists=True, file_okay=False, dir_okay=True)],
     out_dir: Annotated[Path, typer.Option("--out-dir")],
-    q_min: Annotated[int, typer.Option("--q-min")] = 30,
-    q_max: Annotated[int, typer.Option("--q-max")] = 80,
+    q_min: Annotated[int, typer.Option("--q-min")] = 60,
+    q_max: Annotated[int, typer.Option("--q-max")] = 100,
     q_step: Annotated[int, typer.Option("--q-step")] = 5,
     target_long_edge: Annotated[Optional[list[str]], typer.Option("--target-long-edge")] = None,
     bg_color: Annotated[str, typer.Option("--bg-color")] = "808080",
@@ -56,6 +56,8 @@ def sweep(
             if len(dft) == 0:
                 continue
             out_png = out_dir / "results" / f"scatter_target{t.name}.png"
+            out_sat_png = out_dir / "results" / f"saturation_target{t.name}.png"
+            out_sat_csv = out_dir / "results" / f"saturation_target{t.name}_by_q.csv"
             scatter_plot(
                 df=dft,
                 out_path=out_png,
@@ -64,6 +66,10 @@ def sweep(
                 show_knee=True,
             )
             typer.echo(f"wrote: {out_png}")
+            sat = saturation_plot(df=dft, out_path=out_sat_png, title=f"saturation target {t.name} (p10/p90 + Δ)")
+            sat.to_csv(out_sat_csv, index=False, encoding="utf-8")
+            typer.echo(f"wrote: {out_sat_png}")
+            typer.echo(f"wrote: {out_sat_csv}")
 
 
 @app.command()
@@ -81,6 +87,13 @@ def plot(
     out_png = out_dir / f"scatter_target{target}.png"
     scatter_plot(df=dft, out_path=out_png, title=f"target {target}", show_pareto=show_pareto, show_knee=show_knee)
     typer.echo(f"wrote: {out_png}")
+
+    out_sat_png = out_dir / f"saturation_target{target}.png"
+    out_sat_csv = out_dir / f"saturation_target{target}_by_q.csv"
+    sat = saturation_plot(df=dft, out_path=out_sat_png, title=f"saturation target {target} (p10/p90 + Δ)")
+    sat.to_csv(out_sat_csv, index=False, encoding="utf-8")
+    typer.echo(f"wrote: {out_sat_png}")
+    typer.echo(f"wrote: {out_sat_csv}")
 
 
 @app.command("plot-interactive")

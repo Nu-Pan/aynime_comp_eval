@@ -106,7 +106,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 - 実装イメージ（例）：
   - `img.save(out_path, "WEBP", quality=q, method=6, use_sharp_yuv=sharp_yuv)`
 - 探索レンジ（例）：
-  - まず粗く：`q = 30..80 step 5`
+  - まず粗く：`q = 60..100 step 5`
   - 絞り込み：膝付近を `step 1` で再探索ニャン。
 
 ### 3) デコード

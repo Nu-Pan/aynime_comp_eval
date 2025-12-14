@@ -17,6 +17,17 @@ class KneePoint:
     err: float
 
 
+@dataclass(frozen=True)
+class SaturationSummary:
+    q: int
+    bpp_median: float
+    ms_ssim_y_p10: float
+    gmsd_p90: float
+    delta_ms_ssim_y_p10: float | None
+    delta_gmsd_p90_improve: float | None
+    delta_bpp_median: float | None
+
+
 def pareto_front(df: pd.DataFrame) -> pd.DataFrame:
     d = df.sort_values(["bpp", "ms_ssim_y"], ascending=[True, False]).reset_index(drop=True)
     best_ms = -1.0
@@ -73,6 +84,82 @@ def summarize_by_q(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values("q", ascending=True)
         .reset_index(drop=True)
     )
+    return s
+
+
+def summarize_saturation_by_q(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.copy()
+    d["bpp"] = d["bpp"].astype(float)
+    d["ms_ssim_y"] = d["ms_ssim_y"].astype(float)
+    d["gmsd"] = d["gmsd"].astype(float)
+    d["q"] = d["q"].astype(int)
+
+    def qtile(p: float):
+        return lambda s: float(np.quantile(s.to_numpy(dtype=float), p))
+
+    s = (
+        d.groupby("q", as_index=False)
+        .agg(
+            bpp_median=("bpp", "median"),
+            ms_ssim_y_p10=("ms_ssim_y", qtile(0.10)),
+            gmsd_p90=("gmsd", qtile(0.90)),
+            n=("q", "size"),
+        )
+        .sort_values("q", ascending=True)
+        .reset_index(drop=True)
+    )
+
+    # Deltas: ms_ssim_y higher is better; gmsd lower is better.
+    s["delta_ms_ssim_y_p10"] = s["ms_ssim_y_p10"].diff()
+    s["delta_gmsd_p90_improve"] = (-s["gmsd_p90"]).diff()
+    s["delta_bpp_median"] = s["bpp_median"].diff()
+    return s
+
+
+def saturation_plot(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    s = summarize_saturation_by_q(df)
+    if len(s) == 0:
+        raise ValueError("No rows to summarize for saturation plot")
+
+    q = s["q"].to_numpy(dtype=int)
+    ms_p10 = s["ms_ssim_y_p10"].to_numpy(dtype=float)
+    gms_p90 = s["gmsd_p90"].to_numpy(dtype=float)
+    d_ms = s["delta_ms_ssim_y_p10"].to_numpy(dtype=float)
+    d_gms = s["delta_gmsd_p90_improve"].to_numpy(dtype=float)
+
+    fig, axes = plt.subplots(2, 2, figsize=(11.0, 7.5), sharex="col")
+    ax_ms, ax_dms = axes[0, 0], axes[0, 1]
+    ax_gm, ax_dgm = axes[1, 0], axes[1, 1]
+
+    ax_ms.plot(q, ms_p10, color="black", linewidth=1.4)
+    ax_ms.set_title("p10(ms_ssim_y) (higher=better)")
+    ax_ms.set_ylabel("p10(ms_ssim_y)")
+    ax_ms.grid(True, alpha=0.25)
+
+    ax_dms.bar(q[1:], d_ms[1:], color="#4c78a8", alpha=0.85)
+    ax_dms.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_dms.set_title("Δ p10(ms_ssim_y) per q step")
+    ax_dms.set_ylabel("Δ p10(ms_ssim_y)")
+    ax_dms.grid(True, alpha=0.25)
+
+    ax_gm.plot(q, gms_p90, color="black", linewidth=1.4)
+    ax_gm.set_title("p90(gmsd) (lower=better)")
+    ax_gm.set_xlabel("q")
+    ax_gm.set_ylabel("p90(gmsd)")
+    ax_gm.grid(True, alpha=0.25)
+
+    ax_dgm.bar(q[1:], d_gms[1:], color="#f58518", alpha=0.85)
+    ax_dgm.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_dgm.set_title("Δ p90(gmsd) improvement (positive=better)")
+    ax_dgm.set_xlabel("q")
+    ax_dgm.set_ylabel("Δ (-p90(gmsd))")
+    ax_dgm.grid(True, alpha=0.25)
+
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
     return s
 
 

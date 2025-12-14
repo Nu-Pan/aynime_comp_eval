@@ -18,7 +18,8 @@ class SweepConfig:
     method: int = 6
     sharp_yuv: bool = False
     bg_color: str = "808080"
-    targets: tuple[TargetSpec, ...] = (TargetSpec("A", 1080), TargetSpec("B", 1600))
+    # targetB is intentionally omitted; we only evaluate the native-view target (A).
+    targets: tuple[TargetSpec, ...] = (TargetSpec("A", 1280),)
     save_webp: str = "best"  # all|best|none
     jobs: int = 1
 
@@ -38,7 +39,7 @@ class SweepConfig:
 
 def parse_target_long_edges(items: Iterable[str] | None) -> tuple[TargetSpec, ...]:
     if not items:
-        return (TargetSpec("A", 1080), TargetSpec("B", 1600))
+        return (TargetSpec("A", 1280),)
 
     targets: list[TargetSpec] = []
     for raw in items:
@@ -55,4 +56,3 @@ def parse_target_long_edges(items: Iterable[str] | None) -> tuple[TargetSpec, ..
         targets.append(TargetSpec(name=name, long_edge=long_edge))
 
     return tuple(targets)
-
