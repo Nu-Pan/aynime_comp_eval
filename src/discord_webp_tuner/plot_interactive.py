@@ -45,7 +45,7 @@ def interactive_scatter_plot(
         d_small = d[~d["q"].isin(big)]
         d = pd.concat([d_big, d_small], ignore_index=True)
 
-    summary = summarize_by_q(df)
+    summary = summarize_by_q(df, ms_ssim_y_quantile=0.10)
     q_vals = sorted(d["q"].unique().tolist())
     q_min = int(min(q_vals)) if q_vals else int(summary["q"].min())
     q_max = int(max(q_vals)) if q_vals else int(summary["q"].max())
@@ -83,7 +83,7 @@ def interactive_scatter_plot(
             )
         )
 
-    # Summary (median) with percentile ranges
+    # Summary (p10) with percentile ranges
     err_minus = (summary["err"] - summary["err_p10"]).astype(float)
     err_plus = (summary["err_p90"] - summary["err"]).astype(float)
     bpp_minus = (summary["bpp"] - summary["bpp_p10"]).astype(float)
@@ -93,7 +93,7 @@ def interactive_scatter_plot(
             x=summary["bpp"].astype(float),
             y=summary["err"].astype(float),
             mode="lines+markers",
-            name="q median",
+            name="q p10",
             marker=dict(
                 size=8,
                 color=summary["q"].astype(int),
@@ -117,7 +117,7 @@ def interactive_scatter_plot(
                 x=front["bpp"].astype(float),
                 y=(1.0 - front["ms_ssim_y"].astype(float)),
                 mode="lines",
-                name="pareto (q median)",
+                name="pareto (q p10)",
                 line=dict(color="black", width=2),
                 hoverinfo="skip",
             )
@@ -167,7 +167,7 @@ def interactive_scatter_plot(
                 yanchor="top",
                 buttons=[
                     dict(label="All q", method="update", args=[{"visible": vis_all}]),
-                    dict(label="Median/Pareto only", method="update", args=[{"visible": vis_median_only}]),
+                    dict(label="p10/Pareto only", method="update", args=[{"visible": vis_median_only}]),
                 ],
             )
         ],

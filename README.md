@@ -23,3 +23,8 @@ discord-webp-tuner sweep --in-dir data/input_png --out-dir data --q-min 60 --q-m
 ```powershell
 discord-webp-tuner plot --csv data/results/metrics.csv --out-dir data/results --target A
 ```
+
+Plot from a directory (merges `metrics*.csv`, including past sweeps):
+```powershell
+discord-webp-tuner plot --csv data/results --out-dir data/results --target A
+```

@@ -41,7 +41,7 @@
       "args": [
         "plot",
         "--csv",
-        "${workspaceFolder}/data/results/metrics.csv",
+        "${workspaceFolder}/data/results",
         "--out-dir",
         "${workspaceFolder}/data/results",
         "--target",

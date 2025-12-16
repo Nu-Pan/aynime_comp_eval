@@ -8,10 +8,54 @@ import typer
 
 from .config import SweepConfig, parse_target_long_edges
 from .pipeline import sweep_dir
-from .plot import saturation_plot, scatter_plot
+from .plot import bpp_hist_by_q_plot, saturation_bpp_plot, saturation_plot, scatter_plot
 from .plot_interactive import interactive_scatter_plot
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
+
+
+def _load_metrics_csvs(*, csv_or_dir: Path, glob: str, dedupe: bool) -> pd.DataFrame:
+    if csv_or_dir.is_dir():
+        csv_paths = sorted([p for p in csv_or_dir.glob(glob) if p.is_file()])
+        if not csv_paths:
+            raise typer.BadParameter(f"No CSV files matched: dir={csv_or_dir} glob={glob!r}")
+    else:
+        csv_paths = [csv_or_dir]
+
+    dfs: list[pd.DataFrame] = []
+    for p in csv_paths:
+        try:
+            df = pd.read_csv(p)
+        except Exception as e:
+            raise typer.BadParameter(f"Failed to read CSV: {p} ({e})") from e
+        df = df.copy()
+        df["_source_csv"] = str(p.name)
+        df["_source_mtime_ns"] = int(p.stat().st_mtime_ns)
+        dfs.append(df)
+
+    out = pd.concat(dfs, ignore_index=True, sort=False) if len(dfs) > 1 else dfs[0]
+    if not dedupe:
+        return out
+
+    # Prefer "newer" rows when the same (image,target,q,encoder) combo appears in multiple runs.
+    key_cols = [
+        "path_png",
+        "target",
+        "target_long_edge",
+        "target_w",
+        "target_h",
+        "q",
+        "method",
+        "sharp_yuv",
+        "bg_color",
+    ]
+    subset = [c for c in key_cols if c in out.columns]
+    sort_cols = [c for c in ["run_id", "_source_mtime_ns"] if c in out.columns]
+    if subset:
+        if sort_cols:
+            out = out.sort_values(sort_cols, ascending=True, na_position="first")
+        out = out.drop_duplicates(subset=subset, keep="last").reset_index(drop=True)
+    return out
 
 
 @app.command()
@@ -28,6 +72,10 @@ def sweep(
     jobs: Annotated[int, typer.Option("--jobs")] = 1,
     psnr: Annotated[bool, typer.Option("--psnr/--no-psnr")] = True,
     plot: Annotated[bool, typer.Option("--plot/--no-plot")] = True,
+    bpp_hist: Annotated[bool, typer.Option("--bpp-hist/--no-bpp-hist")] = True,
+    bpp_hist_bins: Annotated[int, typer.Option("--bpp-hist-bins")] = 50,
+    bpp_hist_cols: Annotated[int, typer.Option("--bpp-hist-cols")] = 5,
+    bpp_hist_x_quantile: Annotated[float, typer.Option("--bpp-hist-x-quantile")] = 0.995,
 ) -> None:
     targets = parse_target_long_edges(target_long_edge)
     config = SweepConfig(
@@ -57,6 +105,8 @@ def sweep(
                 continue
             out_png = out_dir / "results" / f"scatter_target{t.name}.png"
             out_sat_png = out_dir / "results" / f"saturation_target{t.name}.png"
+            out_sat_bpp_png = out_dir / "results" / f"saturation_bpp_target{t.name}.png"
+            out_bpp_hist_png = out_dir / "results" / f"bpp_hist_by_q_target{t.name}.png"
             out_sat_csv = out_dir / "results" / f"saturation_target{t.name}_by_q.csv"
             scatter_plot(
                 df=dft,
@@ -66,21 +116,65 @@ def sweep(
                 show_knee=True,
             )
             typer.echo(f"wrote: {out_png}")
-            sat = saturation_plot(df=dft, out_path=out_sat_png, title=f"saturation target {t.name} (p10/p90 + Δ)")
+            if bpp_hist:
+                bpp_hist_by_q_plot(
+                    df=dft,
+                    out_path=out_bpp_hist_png,
+                    title=f"bpp histogram by q (target {t.name})",
+                    bins=int(bpp_hist_bins),
+                    max_cols=int(bpp_hist_cols),
+                    x_max_quantile=float(bpp_hist_x_quantile),
+                )
+                typer.echo(f"wrote: {out_bpp_hist_png}")
+            sat = saturation_plot(df=dft, out_path=out_sat_png, title=f"saturation target {t.name} (p10/p90 + deltas)")
             sat.to_csv(out_sat_csv, index=False, encoding="utf-8")
+            saturation_bpp_plot(df=dft, out_path=out_sat_bpp_png, title=f"saturation (bpp) target {t.name} (p10/p90 + knees)")
             typer.echo(f"wrote: {out_sat_png}")
+            typer.echo(f"wrote: {out_sat_bpp_png}")
             typer.echo(f"wrote: {out_sat_csv}")
 
 
 @app.command()
 def plot(
-    csv: Annotated[Path, typer.Option("--csv", exists=True, file_okay=True, dir_okay=False)],
+    csv: Annotated[Path, typer.Option("--csv", exists=True, file_okay=True, dir_okay=True)],
     out_dir: Annotated[Path, typer.Option("--out-dir")],
     target: Annotated[str, typer.Option("--target")] = "A",
     show_pareto: Annotated[bool, typer.Option("--pareto/--no-pareto")] = True,
     show_knee: Annotated[bool, typer.Option("--knee/--no-knee")] = True,
+    glob: Annotated[str, typer.Option("--glob")] = "metrics*.csv",
+    dedupe: Annotated[bool, typer.Option("--dedupe/--no-dedupe")] = True,
+    q_min: Annotated[Optional[int], typer.Option("--q-min")] = None,
+    q_max: Annotated[Optional[int], typer.Option("--q-max")] = None,
+    method: Annotated[Optional[int], typer.Option("--method")] = None,
+    sharp_yuv: Annotated[Optional[int], typer.Option("--sharp-yuv")] = None,
+    bg_color: Annotated[Optional[str], typer.Option("--bg-color")] = None,
+    bpp_hist: Annotated[bool, typer.Option("--bpp-hist/--no-bpp-hist")] = True,
+    bpp_hist_bins: Annotated[int, typer.Option("--bpp-hist-bins")] = 50,
+    bpp_hist_cols: Annotated[int, typer.Option("--bpp-hist-cols")] = 5,
+    bpp_hist_x_quantile: Annotated[float, typer.Option("--bpp-hist-x-quantile")] = 0.995,
 ) -> None:
-    df = pd.read_csv(csv)
+    df = _load_metrics_csvs(csv_or_dir=csv, glob=glob, dedupe=dedupe)
+    if q_min is not None:
+        if "q" not in df.columns:
+            raise typer.BadParameter(f"--q-min requires 'q' column in {csv}")
+        df = df[df["q"].astype(int) >= int(q_min)]
+    if q_max is not None:
+        if "q" not in df.columns:
+            raise typer.BadParameter(f"--q-max requires 'q' column in {csv}")
+        df = df[df["q"].astype(int) <= int(q_max)]
+    if method is not None:
+        if "method" not in df.columns:
+            raise typer.BadParameter(f"--method requires 'method' column in {csv}")
+        df = df[df["method"].astype(int) == int(method)]
+    if sharp_yuv is not None:
+        if "sharp_yuv" not in df.columns:
+            raise typer.BadParameter(f"--sharp-yuv requires 'sharp_yuv' column in {csv}")
+        df = df[df["sharp_yuv"].astype(int) == int(sharp_yuv)]
+    if bg_color is not None:
+        if "bg_color" not in df.columns:
+            raise typer.BadParameter(f"--bg-color requires 'bg_color' column in {csv}")
+        df = df[df["bg_color"].astype(str) == str(bg_color).strip().lstrip("#")]
+
     dft = df[df["target"] == target]
     if len(dft) == 0:
         raise typer.BadParameter(f"No rows for target={target!r} in {csv}")
@@ -88,24 +182,41 @@ def plot(
     scatter_plot(df=dft, out_path=out_png, title=f"target {target}", show_pareto=show_pareto, show_knee=show_knee)
     typer.echo(f"wrote: {out_png}")
 
+    if bpp_hist:
+        out_bpp_hist_png = out_dir / f"bpp_hist_by_q_target{target}.png"
+        bpp_hist_by_q_plot(
+            df=dft,
+            out_path=out_bpp_hist_png,
+            title=f"bpp histogram by q (target {target})",
+            bins=int(bpp_hist_bins),
+            max_cols=int(bpp_hist_cols),
+            x_max_quantile=float(bpp_hist_x_quantile),
+        )
+        typer.echo(f"wrote: {out_bpp_hist_png}")
+
     out_sat_png = out_dir / f"saturation_target{target}.png"
+    out_sat_bpp_png = out_dir / f"saturation_bpp_target{target}.png"
     out_sat_csv = out_dir / f"saturation_target{target}_by_q.csv"
-    sat = saturation_plot(df=dft, out_path=out_sat_png, title=f"saturation target {target} (p10/p90 + Δ)")
+    sat = saturation_plot(df=dft, out_path=out_sat_png, title=f"saturation target {target} (p10/p90 + deltas)")
     sat.to_csv(out_sat_csv, index=False, encoding="utf-8")
+    saturation_bpp_plot(df=dft, out_path=out_sat_bpp_png, title=f"saturation (bpp) target {target} (p10/p90 + knees)")
     typer.echo(f"wrote: {out_sat_png}")
+    typer.echo(f"wrote: {out_sat_bpp_png}")
     typer.echo(f"wrote: {out_sat_csv}")
 
 
 @app.command("plot-interactive")
 def plot_interactive(
-    csv: Annotated[Path, typer.Option("--csv", exists=True, file_okay=True, dir_okay=False)],
+    csv: Annotated[Path, typer.Option("--csv", exists=True, file_okay=True, dir_okay=True)],
     out_dir: Annotated[Path, typer.Option("--out-dir")],
     target: Annotated[str, typer.Option("--target")] = "A",
     show_pareto: Annotated[bool, typer.Option("--pareto/--no-pareto")] = True,
     show_knee: Annotated[bool, typer.Option("--knee/--no-knee")] = True,
     sample_per_q: Annotated[int, typer.Option("--sample-per-q")] = 0,
+    glob: Annotated[str, typer.Option("--glob")] = "metrics*.csv",
+    dedupe: Annotated[bool, typer.Option("--dedupe/--no-dedupe")] = True,
 ) -> None:
-    df = pd.read_csv(csv)
+    df = _load_metrics_csvs(csv_or_dir=csv, glob=glob, dedupe=dedupe)
     dft = df[df["target"] == target]
     if len(dft) == 0:
         raise typer.BadParameter(f"No rows for target={target!r} in {csv}")
