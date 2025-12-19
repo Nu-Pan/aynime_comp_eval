@@ -14,7 +14,7 @@ import PIL
 from PIL import Image, features
 from tqdm import tqdm
 
-from .config import SweepConfig, TargetSpec
+from .config import SweepConfig
 from .io import (
     cache_paths_for,
     composite_alpha_to_rgb,
@@ -98,6 +98,7 @@ def _process_one_image(
     out_dir: Path,
     config: SweepConfig,
     compute_psnr: bool,
+    compute_ssimulacra2: bool,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     require_pillow_webp_support()
@@ -108,73 +109,79 @@ def _process_one_image(
     w0, h0 = img.size
     base_rgb = composite_alpha_to_rgb(img, bg_rgb)
 
-    for target in config.targets:
-        cache = cache_paths_for(
-            out_dir=out_dir,
-            path_png=path_png,
-            target_name=target.name,
-            long_edge=target.long_edge,
-            bg_color=config.bg_color,
+    cache = cache_paths_for(
+        out_dir=out_dir,
+        path_png=path_png,
+        long_edge=int(config.long_edge),
+        bg_color=config.bg_color,
+    )
+    if not cache.resized_png.exists():
+        resized = _resize_for_long_edge(base_rgb, int(config.long_edge))
+        ensure_dir(cache.resized_png.parent)
+        resized.save(cache.resized_png, format="PNG", optimize=True)
+    else:
+        with Image.open(cache.resized_png) as im:
+            resized = im.convert("RGB")
+            resized.load()
+
+    tw, th = resized.size
+    rel = safe_relpath(path_png, in_dir)
+
+    for q in config.q_values:
+        webp_cache = cache.webp_dir / f"{cache.resized_png.stem}_q{int(q)}_m{config.method}_sharp{int(config.sharp_yuv)}.webp"
+        if not webp_cache.exists():
+            _encode_webp(
+                out_webp=webp_cache,
+                img_rgb=resized,
+                q=q,
+                method=config.method,
+                sharp_yuv=config.sharp_yuv,
+            )
+        recon = _decode_webp(webp_cache)
+        try:
+            m = compute_metrics_y(
+                resized,
+                recon,
+                compute_psnr=compute_psnr,
+                compute_ssimulacra2=compute_ssimulacra2,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Metrics failed for png={path_png} long_edge={config.long_edge} q={q} method={config.method} "
+                f"sharp_yuv={config.sharp_yuv} bg_color={config.bg_color} webp_cache={webp_cache} ({e})"
+            ) from e
+        webp_bytes = int(os.path.getsize(webp_cache))
+        bpp = float(webp_bytes) / float(tw * th)
+
+        rows.append(
+            {
+                "path_png": rel,
+                "w": int(w0),
+                "h": int(h0),
+                "long_edge": int(config.long_edge),
+                "eval_w": int(tw),
+                "eval_h": int(th),
+                "q": int(q),
+                "method": int(config.method),
+                "sharp_yuv": bool(config.sharp_yuv),
+                "bg_color": str(config.bg_color),
+                "webp_bytes": int(webp_bytes),
+                "bpp": float(bpp),
+                "ms_ssim_y": float(m.ms_ssim_y),
+                "gmsd": float(m.gmsd),
+                "psnr_y": (None if m.psnr_y is None else float(m.psnr_y)),
+                "ssimulacra2": (None if m.ssimulacra2 is None else float(m.ssimulacra2)),
+                "webp_path_cache": str(webp_cache),
+            }
         )
-        if not cache.resized_png.exists():
-            resized = _resize_for_target(base_rgb, target)
-            ensure_dir(cache.resized_png.parent)
-            resized.save(cache.resized_png, format="PNG", optimize=True)
-        else:
-            with Image.open(cache.resized_png) as im:
-                resized = im.convert("RGB")
-                resized.load()
-
-        tw, th = resized.size
-        rel = safe_relpath(path_png, in_dir)
-
-        for q in config.q_values:
-            webp_cache = (
-                cache.webp_dir
-                / f"{cache.resized_png.stem}_q{int(q)}_m{config.method}_sharp{int(config.sharp_yuv)}.webp"
-            )
-            if not webp_cache.exists():
-                _encode_webp(
-                    out_webp=webp_cache,
-                    img_rgb=resized,
-                    q=q,
-                    method=config.method,
-                    sharp_yuv=config.sharp_yuv,
-                )
-            recon = _decode_webp(webp_cache)
-            m = compute_metrics_y(resized, recon, compute_psnr=compute_psnr)
-            webp_bytes = int(os.path.getsize(webp_cache))
-            bpp = float(webp_bytes) / float(tw * th)
-
-            rows.append(
-                {
-                    "path_png": rel,
-                    "w": int(w0),
-                    "h": int(h0),
-                    "target": target.name,
-                    "target_long_edge": int(target.long_edge),
-                    "target_w": int(tw),
-                    "target_h": int(th),
-                    "q": int(q),
-                    "method": int(config.method),
-                    "sharp_yuv": bool(config.sharp_yuv),
-                    "bg_color": str(config.bg_color),
-                    "webp_bytes": int(webp_bytes),
-                    "bpp": float(bpp),
-                    "ms_ssim_y": float(m.ms_ssim_y),
-                    "gmsd": float(m.gmsd),
-                    "psnr_y": (None if m.psnr_y is None else float(m.psnr_y)),
-                    "webp_path_cache": str(webp_cache),
-                }
-            )
 
     return rows
 
 
-def _resize_for_target(img_rgb: Image.Image, target: TargetSpec) -> Image.Image:
+def _resize_for_long_edge(img_rgb: Image.Image, long_edge: int) -> Image.Image:
     from .io import resize_to_long_edge
 
-    return resize_to_long_edge(img_rgb, target.long_edge)
+    return resize_to_long_edge(img_rgb, int(long_edge))
 
 
 def sweep_dir(
@@ -183,6 +190,7 @@ def sweep_dir(
     out_dir: Path,
     config: SweepConfig,
     compute_psnr: bool = True,
+    compute_ssimulacra2: bool = False,
 ) -> Path:
     in_dir = in_dir.expanduser().resolve()
     out_dir = out_dir.expanduser().resolve()
@@ -208,6 +216,7 @@ def sweep_dir(
                 "webp_supported": bool(features.check("webp")),
             },
             "compute_psnr": bool(compute_psnr),
+            "compute_ssimulacra2": bool(compute_ssimulacra2),
             "config": config.to_jsonable(),
         },
     )
@@ -224,6 +233,7 @@ def sweep_dir(
                     out_dir=out_dir,
                     config=config,
                     compute_psnr=compute_psnr,
+                    compute_ssimulacra2=compute_ssimulacra2,
                 )
             )
     else:
@@ -236,6 +246,7 @@ def sweep_dir(
                     out_dir=out_dir,
                     config=config,
                     compute_psnr=compute_psnr,
+                    compute_ssimulacra2=compute_ssimulacra2,
                 )
                 for w in work_items
             ]
@@ -269,17 +280,17 @@ def _maybe_save_webp_outputs(*, df: pd.DataFrame, in_dir: Path, out_dir: Path, c
         for _, row in df.iterrows():
             src = Path(str(row["webp_path_cache"]))
             rel = str(row["path_png"]).replace("/", "_").replace("\\", "_")
-            target = str(row["target"])
+            le = int(row["long_edge"]) if "long_edge" in row else int(config.long_edge)
             q = int(row["q"])
-            dst = out_webp_dir / f"{Path(rel).stem}_{target}_q{q}.webp"
+            dst = out_webp_dir / f"{Path(rel).stem}_le{le}_q{q}.webp"
             if not dst.exists():
                 shutil.copy2(src, dst)
         return
 
     from .plot import knee_by_max_distance, pareto_front
 
-    group_cols = ["path_png", "target"]
-    for (path_png, target), g in df.groupby(group_cols, sort=False):
+    group_cols = ["path_png", "long_edge"]
+    for (path_png, long_edge), g in df.groupby(group_cols, sort=False):
         front = pareto_front(g)
         knee = knee_by_max_distance(front)
         if knee is not None:
@@ -294,6 +305,6 @@ def _maybe_save_webp_outputs(*, df: pd.DataFrame, in_dir: Path, out_dir: Path, c
 
         src = Path(str(pick["webp_path_cache"]))
         rel = str(path_png).replace("/", "_").replace("\\", "_")
-        dst = out_webp_dir / f"{Path(rel).stem}_{target}_q{int(pick['q'])}.webp"
+        dst = out_webp_dir / f"{Path(rel).stem}_le{int(long_edge)}_q{int(pick['q'])}.webp"
         if not dst.exists():
             shutil.copy2(src, dst)

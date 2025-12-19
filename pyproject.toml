@@ -21,6 +21,7 @@ dependencies = [
 metrics = [
   "torch",
   "piq>=0.8",
+  "ssimulacra2>=0.3.0",
 ]
 interactive = [
   "plotly>=5.18",

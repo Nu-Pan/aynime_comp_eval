@@ -35,6 +35,65 @@ class SaturationSummary:
     delta_bpp_median: float | None
 
 
+def summarize_by_q_err(
+    df: pd.DataFrame,
+    *,
+    err_col: str = "err",
+    err_quantile: float = 0.90,
+) -> pd.DataFrame:
+    d = df.copy()
+    d["bpp"] = d["bpp"].astype(float)
+    d[err_col] = pd.to_numeric(d[err_col], errors="coerce")
+    d["q"] = d["q"].astype(int)
+    if not (0.0 <= float(err_quantile) <= 1.0):
+        raise ValueError(f"err_quantile must be in [0,1] (got {err_quantile})")
+
+    d = d[np.isfinite(d["bpp"].to_numpy(dtype=float)) & np.isfinite(d[err_col].to_numpy(dtype=float))]
+
+    def qtile(p: float):
+        return lambda s: float(np.quantile(s.to_numpy(dtype=float), p))
+
+    s = (
+        d.groupby("q", as_index=False)
+        .agg(
+            bpp=("bpp", "median"),
+            err=(err_col, qtile(float(err_quantile))),
+            err_p10=(err_col, qtile(0.10)),
+            err_p90=(err_col, qtile(0.90)),
+            n=(err_col, "size"),
+            bpp_p10=("bpp", qtile(0.10)),
+            bpp_p90=("bpp", qtile(0.90)),
+        )
+        .sort_values("q", ascending=True)
+        .reset_index(drop=True)
+    )
+    return s
+
+
+def pareto_front_err(df: pd.DataFrame) -> pd.DataFrame:
+    d = df.sort_values(["bpp", "err"], ascending=[True, True]).reset_index(drop=True)
+    best_err = float("inf")
+    keep = []
+    for i, row in d.iterrows():
+        e = float(row["err"])
+        if e < best_err:
+            keep.append(i)
+            best_err = e
+    return d.loc[keep].sort_values("bpp", ascending=True)
+
+
+def knee_by_max_distance_err(front: pd.DataFrame) -> KneePointXY | None:
+    if len(front) < 3:
+        return None
+    x = front["bpp"].to_numpy(dtype=float)
+    y = front["err"].to_numpy(dtype=float)
+    idx = knee_index_by_max_distance_xy(x, y)
+    if idx is None:
+        return None
+    row = front.iloc[int(idx)]
+    return KneePointXY(q=int(row["q"]), bpp=float(row["bpp"]), y=float(row["err"]))
+
+
 def pareto_front(df: pd.DataFrame) -> pd.DataFrame:
     d = df.sort_values(["bpp", "ms_ssim_y"], ascending=[True, False]).reset_index(drop=True)
     best_ms = -1.0
@@ -318,6 +377,131 @@ def saturation_plot(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataF
     return s
 
 
+def saturation_plot_ms_ssim_y(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    s = summarize_saturation_by_q(df)
+    if len(s) == 0:
+        raise ValueError("No rows to summarize for saturation plot")
+
+    q = s["q"].to_numpy(dtype=int)
+    ms_p10 = s["ms_ssim_y_p10"].to_numpy(dtype=float)
+    d_ms = s["delta_ms_ssim_y_p10_per_q"].to_numpy(dtype=float)
+
+    fig, (ax_ms, ax_dms) = plt.subplots(2, 1, figsize=(10.0, 7.2), sharex=True)
+
+    ax_ms.plot(q, ms_p10, color="black", linewidth=1.4, marker="o", markersize=3.8)
+    ax_ms.set_title("p10(ms_ssim_y) (higher=better)")
+    ax_ms.set_ylabel("p10(ms_ssim_y)")
+    ax_ms.grid(True, alpha=0.25)
+
+    ax_dms.bar(q[1:], d_ms[1:], color="#4c78a8", alpha=0.85)
+    ax_dms.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_dms.set_title("d p10(ms_ssim_y) / dq (higher=better)")
+    ax_dms.set_xlabel("q")
+    ax_dms.set_ylabel("d p10(ms_ssim_y) / dq")
+    ax_dms.grid(True, alpha=0.25)
+
+    for qq, yy in zip(q, ms_p10, strict=True):
+        ax_ms.annotate(str(int(qq)), (float(qq), float(yy)), textcoords="offset points", xytext=(4, 2), fontsize=8, alpha=0.65)
+
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    return s
+
+
+def saturation_plot_gmsd_y(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    s = summarize_saturation_by_q(df)
+    if len(s) == 0:
+        raise ValueError("No rows to summarize for saturation plot")
+
+    q = s["q"].to_numpy(dtype=int)
+    gms_p90 = s["gmsd_p90"].to_numpy(dtype=float)
+    d_gms = s["delta_gmsd_p90_improve_per_q"].to_numpy(dtype=float)
+
+    fig, (ax_gm, ax_dgm) = plt.subplots(2, 1, figsize=(10.0, 7.2), sharex=True)
+
+    ax_gm.plot(q, gms_p90, color="black", linewidth=1.4, marker="o", markersize=3.8)
+    ax_gm.set_title("p90(gmsd) (lower=better)")
+    ax_gm.set_ylabel("p90(gmsd)")
+    ax_gm.grid(True, alpha=0.25)
+
+    ax_dgm.bar(q[1:], d_gms[1:], color="#f58518", alpha=0.85)
+    ax_dgm.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_dgm.set_title("d p90(gmsd) improvement / dq (positive=better)")
+    ax_dgm.set_xlabel("q")
+    ax_dgm.set_ylabel("d (-p90(gmsd)) / dq")
+    ax_dgm.grid(True, alpha=0.25)
+
+    for qq, yy in zip(q, gms_p90, strict=True):
+        ax_gm.annotate(str(int(qq)), (float(qq), float(yy)), textcoords="offset points", xytext=(4, 2), fontsize=8, alpha=0.65)
+
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    return s
+
+
+def saturation_plot_ssimulacra2(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    d = df.copy()
+    if "ssimulacra2" not in d.columns:
+        raise ValueError("saturation_plot_ssimulacra2 requires column: ssimulacra2")
+
+    d["q"] = d["q"].astype(int)
+    d["ssimulacra2"] = pd.to_numeric(d["ssimulacra2"], errors="coerce")
+    d = d[np.isfinite(d["ssimulacra2"].to_numpy(dtype=float))]
+    if len(d) == 0:
+        raise ValueError("No rows to summarize for ssimulacra2 saturation plot")
+
+    def qtile(p: float):
+        return lambda s: float(np.quantile(s.to_numpy(dtype=float), p))
+
+    s = (
+        d.groupby("q", as_index=False)
+        .agg(
+            ssimulacra2_p10=("ssimulacra2", qtile(0.10)),
+            n=("q", "size"),
+        )
+        .sort_values("q", ascending=True)
+        .reset_index(drop=True)
+    )
+    s["delta_q"] = s["q"].diff()
+    s["delta_ssimulacra2_p10"] = s["ssimulacra2_p10"].diff()
+    dq = s["delta_q"].to_numpy(dtype=float)
+    s["delta_ssimulacra2_p10_per_q"] = np.where(dq > 0, s["delta_ssimulacra2_p10"].to_numpy(dtype=float) / dq, np.nan)
+
+    q = s["q"].to_numpy(dtype=int)
+    s2_p10 = s["ssimulacra2_p10"].to_numpy(dtype=float)
+    d_s2 = s["delta_ssimulacra2_p10_per_q"].to_numpy(dtype=float)
+
+    fig, (ax_s2, ax_ds2) = plt.subplots(2, 1, figsize=(10.0, 7.2), sharex=True)
+
+    ax_s2.plot(q, s2_p10, color="black", linewidth=1.4, marker="o", markersize=3.8)
+    ax_s2.set_title("p10(ssimulacra2) (higher=better)")
+    ax_s2.set_ylabel("p10(ssimulacra2)")
+    ax_s2.grid(True, alpha=0.25)
+
+    ax_ds2.bar(q[1:], d_s2[1:], color="#54a24b", alpha=0.85)
+    ax_ds2.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_ds2.set_title("d p10(ssimulacra2) / dq (higher=better)")
+    ax_ds2.set_xlabel("q")
+    ax_ds2.set_ylabel("d p10(ssimulacra2) / dq")
+    ax_ds2.grid(True, alpha=0.25)
+
+    for qq, yy in zip(q, s2_p10, strict=True):
+        ax_s2.annotate(str(int(qq)), (float(qq), float(yy)), textcoords="offset points", xytext=(4, 2), fontsize=8, alpha=0.65)
+
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    return s
+
+
 def saturation_bpp_plot(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     s = summarize_saturation_by_q(df)
@@ -391,6 +575,398 @@ def saturation_bpp_plot(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.D
     fig.savefig(out_path, dpi=160)
     plt.close(fig)
     return s
+
+
+def saturation_bpp_plot_ms_ssim_y(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    s = summarize_saturation_by_q(df)
+    if len(s) == 0:
+        raise ValueError("No rows to summarize for saturation plot")
+
+    q = s["q"].to_numpy(dtype=int)
+    bpp = s["bpp_median"].to_numpy(dtype=float)
+    ms_p10 = s["ms_ssim_y_p10"].to_numpy(dtype=float)
+    d_ms_per_bpp = s["delta_ms_ssim_y_p10_per_bpp"].to_numpy(dtype=float)
+    d_bpp = s["delta_bpp_median"].to_numpy(dtype=float)
+
+    fig, (ax_ms, ax_dms) = plt.subplots(2, 1, figsize=(10.0, 7.2), sharex=True)
+
+    ax_ms.plot(bpp, ms_p10, color="black", linewidth=1.4, marker="o", markersize=3.8)
+    ax_ms.set_title("p10(ms_ssim_y) vs bpp (higher=better)")
+    ax_ms.set_ylabel("p10(ms_ssim_y)")
+    ax_ms.grid(True, alpha=0.25)
+
+    widths = np.maximum(d_bpp[1:], 0.0)
+    ax_dms.bar(bpp[:-1], d_ms_per_bpp[1:], color="#4c78a8", alpha=0.85, width=widths, align="edge")
+    ax_dms.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_dms.set_title("d p10(ms_ssim_y) / d bpp (higher=better)")
+    ax_dms.set_xlabel("bpp (median by q)")
+    ax_dms.set_ylabel("d p10(ms_ssim_y) / d bpp")
+    ax_dms.grid(True, alpha=0.25)
+
+    knee_idx = knee_index_by_max_distance_xy(bpp, ms_p10)
+    if knee_idx is not None:
+        knee = KneePointXY(q=int(q[knee_idx]), bpp=float(bpp[knee_idx]), y=float(ms_p10[knee_idx]))
+        for ax in (ax_ms, ax_dms):
+            ax.axvline(knee.bpp, color="#e45756", linewidth=1.1, alpha=0.75, linestyle="--")
+        ax_ms.scatter([knee.bpp], [knee.y], marker="*", s=180, color="#e45756", zorder=5)
+        ax_ms.annotate(
+            f"knee q={knee.q}",
+            (knee.bpp, knee.y),
+            textcoords="offset points",
+            xytext=(6, -10),
+            fontsize=9,
+            color="#e45756",
+        )
+
+    for bx, by, qq in zip(bpp, ax_ms.lines[0].get_ydata(), q, strict=True):
+        ax_ms.annotate(str(int(qq)), (float(bx), float(by)), textcoords="offset points", xytext=(4, 2), fontsize=8, alpha=0.65)
+
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    return s
+
+
+def saturation_bpp_plot_gmsd_y(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    s = summarize_saturation_by_q(df)
+    if len(s) == 0:
+        raise ValueError("No rows to summarize for saturation plot")
+
+    q = s["q"].to_numpy(dtype=int)
+    bpp = s["bpp_median"].to_numpy(dtype=float)
+    gms_p90 = s["gmsd_p90"].to_numpy(dtype=float)
+    d_gms_per_bpp = s["delta_gmsd_p90_improve_per_bpp"].to_numpy(dtype=float)
+    d_bpp = s["delta_bpp_median"].to_numpy(dtype=float)
+
+    fig, (ax_gm, ax_dgm) = plt.subplots(2, 1, figsize=(10.0, 7.2), sharex=True)
+
+    ax_gm.plot(bpp, gms_p90, color="black", linewidth=1.4, marker="o", markersize=3.8)
+    ax_gm.set_title("p90(gmsd) vs bpp (lower=better)")
+    ax_gm.set_ylabel("p90(gmsd)")
+    ax_gm.grid(True, alpha=0.25)
+
+    widths = np.maximum(d_bpp[1:], 0.0)
+    ax_dgm.bar(bpp[:-1], d_gms_per_bpp[1:], color="#f58518", alpha=0.85, width=widths, align="edge")
+    ax_dgm.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_dgm.set_title("d p90(gmsd) improvement / d bpp (higher=better)")
+    ax_dgm.set_xlabel("bpp (median by q)")
+    ax_dgm.set_ylabel("d (-p90(gmsd)) / d bpp")
+    ax_dgm.grid(True, alpha=0.25)
+
+    knee_idx = knee_index_by_max_distance_xy(bpp, gms_p90)
+    if knee_idx is not None:
+        knee = KneePointXY(q=int(q[knee_idx]), bpp=float(bpp[knee_idx]), y=float(gms_p90[knee_idx]))
+        for ax in (ax_gm, ax_dgm):
+            ax.axvline(knee.bpp, color="#b279a2", linewidth=1.1, alpha=0.75, linestyle=":")
+        ax_gm.scatter([knee.bpp], [knee.y], marker="*", s=180, color="#b279a2", zorder=5)
+        ax_gm.annotate(
+            f"knee q={knee.q}",
+            (knee.bpp, knee.y),
+            textcoords="offset points",
+            xytext=(6, -10),
+            fontsize=9,
+            color="#b279a2",
+        )
+
+    for bx, by, qq in zip(bpp, ax_gm.lines[0].get_ydata(), q, strict=True):
+        ax_gm.annotate(str(int(qq)), (float(bx), float(by)), textcoords="offset points", xytext=(4, 2), fontsize=8, alpha=0.65)
+
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    return s
+
+
+def saturation_bpp_plot_ssimulacra2(*, df: pd.DataFrame, out_path: Path, title: str) -> pd.DataFrame:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    d = df.copy()
+    if "ssimulacra2" not in d.columns:
+        raise ValueError("saturation_bpp_plot_ssimulacra2 requires column: ssimulacra2")
+
+    d["bpp"] = d["bpp"].astype(float)
+    d["q"] = d["q"].astype(int)
+    d["ssimulacra2"] = pd.to_numeric(d["ssimulacra2"], errors="coerce")
+    d = d[np.isfinite(d["bpp"].to_numpy(dtype=float)) & np.isfinite(d["ssimulacra2"].to_numpy(dtype=float))]
+    if len(d) == 0:
+        raise ValueError("No rows to summarize for ssimulacra2 bpp saturation plot")
+
+    def qtile(p: float):
+        return lambda s: float(np.quantile(s.to_numpy(dtype=float), p))
+
+    s = (
+        d.groupby("q", as_index=False)
+        .agg(
+            bpp_median=("bpp", "median"),
+            ssimulacra2_p10=("ssimulacra2", qtile(0.10)),
+            n=("q", "size"),
+        )
+        .sort_values("q", ascending=True)
+        .reset_index(drop=True)
+    )
+    s["delta_bpp_median"] = s["bpp_median"].diff()
+    s["delta_ssimulacra2_p10"] = s["ssimulacra2_p10"].diff()
+    s["delta_ssimulacra2_p10_per_bpp"] = np.where(
+        s["delta_bpp_median"].to_numpy(dtype=float) > 0,
+        s["delta_ssimulacra2_p10"].to_numpy(dtype=float) / s["delta_bpp_median"].to_numpy(dtype=float),
+        np.nan,
+    )
+
+    q = s["q"].to_numpy(dtype=int)
+    bpp = s["bpp_median"].to_numpy(dtype=float)
+    s2_p10 = s["ssimulacra2_p10"].to_numpy(dtype=float)
+    d_s2_per_bpp = s["delta_ssimulacra2_p10_per_bpp"].to_numpy(dtype=float)
+    d_bpp = s["delta_bpp_median"].to_numpy(dtype=float)
+
+    fig, (ax_s2, ax_ds2) = plt.subplots(2, 1, figsize=(10.0, 7.2), sharex=True)
+
+    ax_s2.plot(bpp, s2_p10, color="black", linewidth=1.4, marker="o", markersize=3.8)
+    ax_s2.set_title("p10(ssimulacra2) vs bpp (higher=better)")
+    ax_s2.set_ylabel("p10(ssimulacra2)")
+    ax_s2.grid(True, alpha=0.25)
+
+    widths = np.maximum(d_bpp[1:], 0.0)
+    ax_ds2.bar(bpp[:-1], d_s2_per_bpp[1:], color="#54a24b", alpha=0.85, width=widths, align="edge")
+    ax_ds2.axhline(0.0, color="black", linewidth=0.8, alpha=0.6)
+    ax_ds2.set_title("d p10(ssimulacra2) / d bpp (higher=better)")
+    ax_ds2.set_xlabel("bpp (median by q)")
+    ax_ds2.set_ylabel("d p10(ssimulacra2) / d bpp")
+    ax_ds2.grid(True, alpha=0.25)
+
+    knee_idx = knee_index_by_max_distance_xy(bpp, s2_p10)
+    if knee_idx is not None:
+        knee = KneePointXY(q=int(q[knee_idx]), bpp=float(bpp[knee_idx]), y=float(s2_p10[knee_idx]))
+        for ax in (ax_s2, ax_ds2):
+            ax.axvline(knee.bpp, color="#72b7b2", linewidth=1.1, alpha=0.75, linestyle="--")
+        ax_s2.scatter([knee.bpp], [knee.y], marker="*", s=180, color="#72b7b2", zorder=5)
+        ax_s2.annotate(
+            f"knee q={knee.q}",
+            (knee.bpp, knee.y),
+            textcoords="offset points",
+            xytext=(6, -10),
+            fontsize=9,
+            color="#72b7b2",
+        )
+
+    for bx, by, qq in zip(bpp, ax_s2.lines[0].get_ydata(), q, strict=True):
+        ax_s2.annotate(str(int(qq)), (float(bx), float(by)), textcoords="offset points", xytext=(4, 2), fontsize=8, alpha=0.65)
+
+    fig.suptitle(title, y=0.995)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160)
+    plt.close(fig)
+    return s
+
+
+def _scatter_plot_from_err(
+    *,
+    df: pd.DataFrame,
+    out_path: Path,
+    title: str,
+    y_label: str,
+    show_pareto: bool = True,
+    show_knee: bool = True,
+    err_quantile: float = 0.90,
+) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    d = df.copy()
+    d["bpp"] = d["bpp"].astype(float)
+    d["q"] = d["q"].astype(int)
+    d["err"] = pd.to_numeric(d["err"], errors="coerce")
+    d = d[np.isfinite(d["bpp"].to_numpy(dtype=float)) & np.isfinite(d["err"].to_numpy(dtype=float))]
+
+    x = d["bpp"].astype(float)
+    y = d["err"].astype(float)
+    summary = summarize_by_q_err(d, err_col="err", err_quantile=float(err_quantile))
+    q_min = int(summary["q"].min()) if len(summary) else int(d["q"].min())
+    q_max = int(summary["q"].max()) if len(summary) else int(d["q"].max())
+    norm = Normalize(vmin=q_min, vmax=q_max)
+
+    plt.figure(figsize=(10, 7))
+    ax = plt.gca()
+    ax.hexbin(
+        x.to_numpy(dtype=float),
+        y.to_numpy(dtype=float),
+        gridsize=140,
+        bins="log",
+        mincnt=1,
+        linewidths=0.0,
+        cmap="Greys",
+        alpha=0.10,
+        zorder=1,
+        rasterized=True,
+    )
+    ax.hexbin(
+        x.to_numpy(dtype=float),
+        y.to_numpy(dtype=float),
+        C=d["q"].to_numpy(dtype=float),
+        reduce_C_function=np.median,
+        gridsize=140,
+        mincnt=5,
+        linewidths=0.0,
+        cmap="viridis",
+        norm=norm,
+        alpha=0.95,
+        zorder=2,
+        rasterized=True,
+    )
+    sc = ax.scatter(
+        summary["bpp"].astype(float),
+        summary["err"].astype(float),
+        c=summary["q"].astype(int),
+        cmap="viridis",
+        norm=norm,
+        s=40,
+        alpha=0.95,
+        edgecolors="black",
+        linewidths=0.25,
+        zorder=4,
+    )
+    ax.vlines(
+        summary["bpp"].astype(float),
+        summary["err_p10"].astype(float),
+        summary["err_p90"].astype(float),
+        colors="black",
+        alpha=0.18,
+        linewidth=0.8,
+        zorder=3,
+    )
+    ax.hlines(
+        summary["err"].astype(float),
+        summary["bpp_p10"].astype(float),
+        summary["bpp_p90"].astype(float),
+        colors="black",
+        alpha=0.10,
+        linewidth=0.8,
+        zorder=3,
+    )
+    ax.plot(
+        summary["bpp"].astype(float),
+        summary["err"].astype(float),
+        color="black",
+        linewidth=1.0,
+        alpha=0.25,
+        zorder=3,
+    )
+    plt.xlabel("bpp (webp_bytes / (w*h))")
+    plt.ylabel(y_label)
+    plt.title(title)
+    plt.colorbar(sc, label="q")
+    plt.grid(True, alpha=0.25)
+    plt.xlim(left=0.0)
+    plt.ylim(bottom=0.0)
+    try:
+        x_hi = float(np.quantile(x.to_numpy(dtype=float), 0.995))
+        y_hi = float(np.quantile(y.to_numpy(dtype=float), 0.995))
+        if x_hi > 0:
+            plt.xlim(0.0, x_hi * 1.02)
+        if y_hi > 0:
+            plt.ylim(0.0, y_hi * 1.10)
+    except Exception:
+        pass
+
+    knee: KneePointXY | None = None
+    if show_pareto:
+        front = pareto_front_err(summary)
+        plt.plot(
+            front["bpp"],
+            front["err"],
+            color="black",
+            linewidth=1.2,
+            alpha=0.8,
+            label=f"pareto (q p{int(round(float(err_quantile) * 100))} err)",
+        )
+        if show_knee:
+            knee = knee_by_max_distance_err(front)
+            if knee is not None:
+                plt.scatter([knee.bpp], [knee.y], marker="*", s=180, color="red", label=f"knee q={knee.q}")
+
+    handles, labels = ax.get_legend_handles_labels()
+    handles += [
+        Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="none",
+            markerfacecolor="black",
+            alpha=0.25,
+            markersize=8,
+            label="density (per-image)",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="none",
+            markerfacecolor=plt.cm.viridis(0.65),
+            alpha=0.45,
+            markersize=8,
+            label="q in bins (median)",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="black",
+            markerfacecolor="white",
+            markeredgewidth=0.8,
+            markersize=7,
+            label=f"q p{int(round(float(err_quantile) * 100))} err (color=q)",
+        ),
+    ]
+    labels += ["density (per-image)", "q in bins (median)", f"q p{int(round(float(err_quantile) * 100))} err (color=q)"]
+    ax.legend(handles=handles, labels=labels, loc="upper right", framealpha=0.85)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=160)
+    plt.close()
+
+
+def scatter_plot_gmsd(
+    *,
+    df: pd.DataFrame,
+    out_path: Path,
+    title: str,
+    show_pareto: bool = True,
+    show_knee: bool = True,
+) -> None:
+    d = df.copy()
+    d["err"] = pd.to_numeric(d["gmsd"], errors="coerce")
+    _scatter_plot_from_err(
+        df=d,
+        out_path=out_path,
+        title=title,
+        y_label="GMSD (Y)  [lower is better]",
+        show_pareto=show_pareto,
+        show_knee=show_knee,
+        err_quantile=0.90,
+    )
+
+
+def scatter_plot_ssimulacra2(
+    *,
+    df: pd.DataFrame,
+    out_path: Path,
+    title: str,
+    show_pareto: bool = True,
+    show_knee: bool = True,
+) -> None:
+    d = df.copy()
+    score = pd.to_numeric(d["ssimulacra2"], errors="coerce")
+    d["err"] = 100.0 - score
+    _scatter_plot_from_err(
+        df=d,
+        out_path=out_path,
+        title=title,
+        y_label="100 - SSIMULACRA2  [lower is better]",
+        show_pareto=show_pareto,
+        show_knee=show_knee,
+        err_quantile=0.90,
+    )
 
 
 def scatter_plot(

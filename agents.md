@@ -6,9 +6,9 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 
 ## スコープ
 - 入力：既存PNG（基本RGB、場合によりRGBA）ニャン。
-- 出力：WebP（Pillowでエンコード）＋評価結果CSV/Parquet＋散布図（matplotlib）ニャン。
-- 評価指標：主に **MS-SSIM（輝度Y）**、補助で **GMSD**、監視でPSNR（任意）ニャン。
-- 評価解像度：縮小表示（ネイティブ表示）を想定した **targetA（想定：1280x720 (HD) の枠に収まるようリサイズ）** のみを使うニャン。
+- 出力：WebP（Pillowでエンコード）＋評価結果CSV＋散布図（matplotlib）ニャン。
+- 評価指標：主に **MS-SSIM（輝度Y）**、補助で **GMSD**、監視でPSNR（任意、デフォルトON）＋SSIMULACRA2（任意、デフォルトOFF）ニャン。
+- 評価解像度：縮小表示を想定した **long_edge=1280（デフォルト）** を主に使うニャン（長辺が1280になるようリサイズ。16:9素材なら 1280x720 になるニャン）。必要なら `--long-edge` で変更できるニャン。
 
 ## 非スコープ
 - Discordクライアントやサーバ側の帯域制御の再現・測定はしないニャン。
@@ -32,6 +32,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
   - `metrics.py`（MS-SSIM/GMSD/PSNR等）
   - `io.py`（入出力、キャッシュ）
   - `plot.py`（散布図、Pareto、膝点検出）
+  - `plot_interactive.py`（Plotlyでのインタラクティブ散布図、任意）
   - `config.py`（探索レンジ・解像度・背景等）
 - `scripts/`
   - `run_sweep.ps1` / `run_sweep.sh`（バッチ用）
@@ -56,10 +57,12 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 - numpy
 - torch（CPUでOK、あるならCUDA可）
 - piq（MS-SSIM/GMSD用）
+- ssimulacra2（SSIMULACRA2用、任意）
 - pandas（集計）
 - matplotlib（散布図）
 - tqdm（進捗）
-- typer（CLI、任意）
+- typer（CLI）
+- plotly（インタラクティブ散布図用、任意）
 
 ---
 
@@ -67,22 +70,35 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 
 ### 入力
 - PNG（sRGB想定）ニャン。
-- 画像サイズは混在してよいが、評価は targetA に揃えるニャン。
+- 画像サイズは混在してよいが、評価は `long_edge`（デフォルト 1280）に揃えるニャン。
 
 ### 出力
-- `results/metrics.csv`（またはparquet）ニャン。
-  - 必須カラム例：
+- `results/metrics.csv`（最新）＋ `results/metrics_YYYYmmdd_HHMMSS.csv`（タイムスタンプ付き）ニャン。
+- `results/run_config_YYYYmmdd_HHMMSS.json`（実行設定ログ）ニャン。
+- `results/metrics.csv` のカラム例：
+    - `run_id`（YYYYmmdd_HHMMSS）
     - `path_png`
     - `w`, `h`
-    - `target`（A固定）
+    - `long_edge`（例：1280）
+    - `eval_w`, `eval_h`（縮小後の評価解像度）
     - `q`（quality）
     - `method`（固定6）
+    - `sharp_yuv`（0/1）
+    - `bg_color`（RGBA合成背景、6桁hex）
     - `webp_bytes`
-    - `bpp`（webp_bytes / (target_w*target_h)）
+    - `bpp`（webp_bytes / (`eval_w`*`eval_h`)）
     - `ms_ssim_y`
     - `gmsd`
-    - `psnr_y`（任意）
-- `results/scatter_targetA.png`（散布図）ニャン。
+    - `psnr_y`（任意、デフォルトON）
+    - `ssimulacra2`（任意、`--ssimulacra2` で計算）
+    - `webp_path_cache`（キャッシュ上のWebPパス）
+- `results/scatter_ms_ssim_y_le1280.png`（散布図：MS-SSIM(Y)）ニャン。
+- `results/scatter_gmsd_y_le1280.png`（散布図：GMSD(Y)）ニャン。
+- `results/scatter_ssimulacra2_le1280.png`（散布図：SSIMULACRA2、ある場合）ニャン。
+- `results/saturation_ms_ssim_y_gmsd_y_le1280_by_q.csv`（`q`集約＋Δの表）ニャン。
+- `results/saturation_q_ms_ssim_y_le1280.png` / `results/saturation_q_gmsd_y_le1280.png`（`q`-vs-分位＋Δ）ニャン。
+- `results/saturation_bpp_ms_ssim_y_le1280.png` / `results/saturation_bpp_gmsd_y_le1280.png`（bpp軸＋膝点）ニャン。
+- `results/bpp_hist_by_q_le1280.png`（q別bppヒストグラム、任意）ニャン。
 - `out_webp/` に軽量WebPを保存（必要ならベストのみ）ニャン。
 
 ---
@@ -94,7 +110,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 - RGBAの場合：
   - 背景色を `bg_color` で選び合成しRGB化ニャン。
 - 縮小：
-  - targetAは **1280x720 (HD) の枠**に収まるよう、アスペクト比を維持してリサイズするニャン（16:9素材なら 1280x720 になるニャン）。
+  - アスペクト比を維持して **長辺が `long_edge`** になるようにリサイズするニャン（16:9素材なら 1280x720 になるニャン）。
   - リサンプラは `LANCZOS` を推奨し、全工程で固定して再現性を担保するニャン。
 
 ### 2) WebPエンコード（Pillow）
@@ -159,6 +175,7 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 - 画像枚数が多い前提なので、以下を入れるニャン：
   - キャッシュ（同一PNG×targetの縮小結果を保存して使い回す）ニャン。
   - WebP生成物も `q` ごとにキャッシュし、指標計算だけを再実行可能にするニャン。
+    - 既定の配置：`cache/resized/`（縮小PNG）・`cache/webp/`（WebP）ニャン。
   - 並列化：
     - 画像単位で `ProcessPoolExecutor` を検討ニャン。
     - torch/PIQはプロセスごと初期化コストがあるので、粒度は「画像1枚×q全探索」を1タスクにするのが無難ニャン。
@@ -177,16 +194,24 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 ## CLI要件（最低限）
 - `sweep`：
   - 入力ディレクトリ、出力ディレクトリ
-  - 例：targetAをHD想定に寄せるなら `--target-long-edge A=1280`（実装が長辺指定の場合）ニャン
+  - 例：Discord想定に寄せるなら `--long-edge 1280`（長辺指定）ニャン
   - `--q-min/--q-max/--q-step`
   - `--bg-color`（RGBA用）
   - `--sharp-yuv`（Pillowの `use_sharp_yuv` 切替）
-  - `--save-webp`（全保存/ベストのみ/保存なし）
+  - `--save-webp`（全保存/ベストのみ/保存なし。`best` は「画像ごと」に Pareto→膝点（max-distance）で1枚選ぶニャン）
+  - `--jobs`（画像単位の並列数）
+  - `--psnr/--no-psnr`（PSNR(Y)のON/OFF、デフォルトON）
+  - `--ssimulacra2/--no-ssimulacra2`（SSIMULACRA2のON/OFF、デフォルトOFF）
+  - `--plot/--no-plot`（スイープ後に図を生成、デフォルトON）
+  - `--bpp-hist/--no-bpp-hist`（q別bppヒストグラム、デフォルトON）
 - `plot`：
-  - CSVから散布図生成
-  - targetは `A` のみ想定
-  - Paretoフロントと膝点候補を描画（任意）
-  - “飽和域の下端”用に `q`-vs-quantile と Δ のプロットを追加（推奨）
+  - `metrics.csv`（または `metrics*.csv` があるディレクトリ）から図と集約CSVを再生成ニャン。
+  - `--glob`（ディレクトリ指定時の読み込みパターン）、`--dedupe`（同一条件の重複を新しいrun優先で除去）
+  - `--q-min/--q-max` / `--long-edge` / `--method` / `--sharp-yuv` / `--bg-color`（フィルタ）
+  - `--pareto/--no-pareto` と `--knee/--no-knee`（散布図のオプション）
+  - “飽和域の下端”用に `q`-vs-quantile と Δ のプロット＋bpp軸版（膝点）も出すニャン。
+- `plot-interactive`（任意）：
+  - Plotlyでインタラクティブ散布図（HTML）を出すニャン（`pip install -e '.[interactive]'` が必要）ニャン。
 
 ---
 
@@ -207,6 +232,6 @@ Discordへ大量投下するアニメ静止画を、見た目の破綻を抑え�
 ---
 
 ## 完了条件（Definition of Done）
-- 指定したPNG群に対し、targetA（必須）で `q` スイープを回し、散布図とCSVが出るニャン。
+- 指定したPNG群に対し、long_edge=1280（デフォルト）で `q` スイープを回し、散布図とCSVが出るニャン。
 - `q` ごとの `p10(ms_ssim_y)` / `p90(gmsd)` とその Δ をプロットでき、飽和域の下端の候補 `q` を機械的に出せるニャン。
 - 複数画像での候補 `q` が目視でも納得でき、Discord用の推奨設定として固定できるニャン。

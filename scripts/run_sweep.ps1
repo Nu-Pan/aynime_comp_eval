@@ -4,7 +4,7 @@ param(
   [int]$QMin = 60,
   [int]$QMax = 100,
   [int]$QStep = 5,
-  [string]$TargetA = "A=1280",
+  [int]$LongEdge = 1280,
   [string]$BgColor = "808080",
   [switch]$SharpYuv,
   [ValidateSet("all","best","none")][string]$SaveWebp = "best",
@@ -18,7 +18,7 @@ $args = @(
   "--q-min", $QMin,
   "--q-max", $QMax,
   "--q-step", $QStep,
-  "--target-long-edge", $TargetA,
+  "--long-edge", $LongEdge,
   "--bg-color", $BgColor,
   "--save-webp", $SaveWebp,
   "--jobs", $Jobs

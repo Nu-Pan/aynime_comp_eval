@@ -37,6 +37,9 @@ def interactive_scatter_plot(
     d["ms_ssim_y"] = d["ms_ssim_y"].astype(float)
     d["q"] = d["q"].astype(int)
     d["err"] = 1.0 - d["ms_ssim_y"]
+    has_s2 = "ssimulacra2" in d.columns
+    if has_s2:
+        d["ssimulacra2"] = pd.to_numeric(d["ssimulacra2"], errors="coerce")
 
     if sample_per_q and sample_per_q > 0:
         sizes = d.groupby("q")["q"].size()
@@ -60,9 +63,15 @@ def interactive_scatter_plot(
 
     fig = go.Figure()
 
+    hover = "bpp=%{x:.4f}<br>err=%{y:.4f}<br>q=%{marker.color}"
+    if has_s2:
+        hover += "<br>ssimulacra2=%{customdata[0]:.4f}"
+    hover += "<extra></extra>"
+
     # Per-q traces: legend toggles show/hide
     for q in q_vals:
         dq = d[d["q"] == q]
+        customdata = dq[["ssimulacra2"]].to_numpy() if has_s2 else None
         fig.add_trace(
             go.Scattergl(
                 x=dq["bpp"],
@@ -79,7 +88,8 @@ def interactive_scatter_plot(
                     cmax=q_max,
                     line=dict(width=0.2, color="rgba(0,0,0,0.15)"),
                 ),
-                hovertemplate="bpp=%{x:.4f}<br>err=%{y:.4f}<br>q=%{marker.color}<extra></extra>",
+                customdata=customdata,
+                hovertemplate=hover,
             )
         )
 

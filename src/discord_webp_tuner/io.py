@@ -90,7 +90,6 @@ def cache_paths_for(
     *,
     out_dir: Path,
     path_png: Path,
-    target_name: str,
     long_edge: int,
     bg_color: str,
 ) -> CachePaths:
@@ -104,7 +103,7 @@ def cache_paths_for(
     ensure_dir(out_webp_dir)
 
     fid = _file_fingerprint(path_png)
-    resized_png = resized_dir / f"{fid}_{target_name}_{long_edge}_bg{bg_color}.png"
+    resized_png = resized_dir / f"{fid}_le{int(long_edge)}_bg{bg_color}.png"
     return CachePaths(resized_png=resized_png, webp_dir=webp_dir, out_webp_dir=out_webp_dir)
 
 
@@ -123,4 +122,3 @@ def safe_relpath(path: Path, base: Path) -> str:
 
 def iter_existing(paths: Iterable[Path]) -> list[Path]:
     return [p for p in paths if p.exists()]
-

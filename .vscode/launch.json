@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "discord-webp-tuner: sweep (A, writes data/results)",
+      "name": "discord-webp-tuner: sweep (writes data/results)",
       "type": "debugpy",
       "request": "launch",
       "module": "discord_webp_tuner.cli",
@@ -16,14 +16,15 @@
         "${workspaceFolder}/data/input_png",
         "--out-dir",
         "${workspaceFolder}/data",
-        "--target-long-edge",
-        "A=1280",
+        "--long-edge",
+        "1280",
         "--q-min",
-        "30",
+        "70",
         "--q-max",
-        "100",
+        "80",
         "--q-step",
-        "10",
+        "1",
+        "--ssimulacra2",
         "--plot"
       ],
       "console": "integratedTerminal",
@@ -44,8 +45,6 @@
         "${workspaceFolder}/data/results",
         "--out-dir",
         "${workspaceFolder}/data/results",
-        "--target",
-        "A",
         "--pareto",
         "--knee"
       ],
